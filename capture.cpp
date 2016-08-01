@@ -89,7 +89,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 50;
+static int              frame_count = 100;
 
 static void errno_exit(const char *s)
 {
@@ -127,9 +127,61 @@ long getEpochTimeShift(){
         return epoch_ms - uptime_ms;
     }
 
-time_t convertEpoch()
-{
 
+
+tm * timeofFrameCpature( v4l2_buffer buf)
+{
+    //capturing the time of at which frame is DQ
+            //without epoch set 
+            printf("\n image captured(before correction) at %ld s, %ld ms\n",buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000);
+
+
+            //with epoch changes 
+           time_t toEpochOffset_ms ;
+           toEpochOffset_ms = getEpochTimeShift();
+
+
+            time_t time_s;
+            long int temp_ms ;
+            long int epochTimeStamp_ms;
+            long int temp_s;
+            long int epochTimeStamp_s;
+
+
+            time(&time_s);
+            temp_ms = 1000 * buf.timestamp.tv_sec + (long int) round(  buf.timestamp.tv_usec / 1000.0);            
+            epochTimeStamp_ms= temp_ms + toEpochOffset_ms ;
+
+            temp_s = buf.timestamp.tv_sec + (long int) (round(  buf.timestamp.tv_usec / 1000.0)/1000.0);            
+            epochTimeStamp_s= temp_s + (long int )(round(toEpochOffset_ms/1000)) ;
+
+            
+            printf( "\nFrame time epoch: %ld s\n",epochTimeStamp_s);
+            printf( "\nFrame time epoch: %ld ms\n",epochTimeStamp_ms);
+            printf( "\nTime in linux : %ld s\n",time_s);
+            
+            
+            //struct timeval tv;
+            //gettimeofday(&tv, 0);
+            //printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
+            
+            struct tm * timeinfo;
+            char timebuffer[50];
+
+
+
+            timeinfo = localtime(&time_s);            
+            //In format HH:MM PM
+            strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
+            printf("System Time  %s\n",timebuffer );
+            //time(&rawtime);
+            timeinfo = localtime(&epochTimeStamp_s);            
+            //In format HH:MM PM
+            strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
+            printf("Frame Buffer capture time %s\n",timebuffer );
+            
+            
+            return timeinfo ;
 
 }
 
@@ -157,12 +209,12 @@ int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
 
 
 
-static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *timestamp)
+static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *timestamp,v4l2_buffer buf)
 {
     int written, i, total, dumpfd;
     char ppm_dumpname[]="laps00000000.ppm";
     char jpg_dumpname[]="laps00000000.jpg";
-    char ppm_user_name[100];
+    char ppm_user_name[98];
     char ppm_header[]="#Frame00000 HH:MM:SS PM";
     char ppm_resolution[16]="\n"HRES_STR" "VRES_STR"";
 
@@ -171,8 +223,9 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     struct tm * timeinfo;
     char timebuffer[50];
     time(&rawtime);
-    timeinfo = localtime ( &rawtime );
+    //timeinfo = localtime ( &rawtime );
     
+    timeinfo = timeofFrameCpature(buf);
     //In format HH:MM PM
     strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
 
@@ -367,10 +420,23 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 unsigned int framecnt=0;
 unsigned char bigbuffer[(1280*960)];
 
-static void process_image(const void *p, int size)
+static void process_image(const void *p, int size,v4l2_buffer buf)
 
 {
     int i, newi, newsize=0;
@@ -411,7 +477,7 @@ static void process_image(const void *p, int size)
             yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi+3], &bigbuffer[newi+4], &bigbuffer[newi+5]);
         }
 
-        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time,buf);
 #else
         printf("Dump YUYV converted to YY size %d\n", size);
        
@@ -433,7 +499,7 @@ static void process_image(const void *p, int size)
     else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
     {
         printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
+        dump_ppm(p, size, framecnt, &frame_time,buf);
     }
     else
     {
@@ -479,7 +545,7 @@ static int read_frame(void)
                 }
             }
 
-            process_image(buffers[0].start, buffers[0].length);
+            process_image(buffers[0].start, buffers[0].length,buf);
             break;
 
         case IO_METHOD_MMAP:
@@ -487,7 +553,9 @@ static int read_frame(void)
 
             buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             buf.memory = V4L2_MEMORY_MMAP;
-            buf.flags = V4L2_BUF_FLAG_TIMECODE;
+            //buf.flags = V4L2_BUF_FLAG_TIMECODE;
+            buf.flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+            //buf.flags = V4L2_BUF_FLAG_TSTAMP_SRC_EOF;
             //Applications call the VIDIOC_QBUF ioctl to enqueue an empty (capturing) or filled (output) buffer in the driver's incoming queue
             //DQUEUE the buffer and capture which is furthre processed 
 
@@ -513,54 +581,12 @@ static int read_frame(void)
 
             assert(buf.index < n_buffers);
 
-
-            //printf("index value %d\n",buf.index );	
-            // to process 
-            process_image(buffers[buf.index].start, buf.bytesused);
-
-             //without epoch set 
-            printf("\n image captured(before correction) at %ld s, %ld ms\n",buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000);
-
-
-            //with epoch changes 
-           long toEpochOffset_ms ;
-           toEpochOffset_ms = getEpochTimeShift();
-
-
-            //////////////////////
-            //...somewhere in your capture loop: 
-
-            //  struct v4l2_buffer buf;
-
-            //make the v4l call to  xioctl(fd, VIDIOC_DQBUF, &buf)
-
-            //then: 
-            long temp_ms ;
-            temp_ms = 1000 * buf.timestamp.tv_sec + (long) round(  buf.timestamp.tv_usec / 1000.0);
-            long epochTimeStamp_ms ;
-            epochTimeStamp_ms= temp_ms + toEpochOffset_ms ;
-
-            printf( "\nFrame time epoch: %ld ms\n",epochTimeStamp_ms);
             
-            struct timeval tv;
+            process_image(buffers[buf.index].start, buf.bytesused,buf);
 
-            gettimeofday(&tv, 0);
-            printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
+
             
-           
-            //extra addition
-            /*
-            cvmat = cvMat(VRES, HRES, CV_8UC3, buffers[0].start);
-            printf("Here0 \n");
-            img = cvDecodeImage(&cvmat, 1);
-			cvShowImage("image", img);
-			printf("Here1 \n");
-			//cvWaitKey(0);
-			printf("Here2 \n");
-    		cvSaveImage("image2.ppm", img, 0);
-    		printf("Here3 \n");
-			//
-            */
+             
             if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
                     errno_exit("VIDIOC_QBUF");
             break;
@@ -595,7 +621,7 @@ static int read_frame(void)
 
             assert(i < n_buffers);
 
-            process_image((void *)buf.m.userptr, buf.bytesused);
+            process_image((void *)buf.m.userptr, buf.bytesused,buf);
 
             if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
                     errno_exit("VIDIOC_QBUF");
@@ -615,7 +641,7 @@ static void mainloop(void)
     struct timespec time_error;
     time_error.tv_sec=0;
     time_error.tv_nsec=0;
-    int fps=20; //choose the fps for video conversion using ffmpeg
+    int fps=30; //choose the fps for video conversion using ffmpeg
 
 
     struct timespec frame_time;
@@ -643,6 +669,8 @@ static void mainloop(void)
             tv.tv_sec = 2;
             tv.tv_usec = 0;
 
+            //https://linuxtv.org/downloads/v4l-dvb-apis/func-select.html
+            //suspend execution until the driver has captured data or is ready to accept data for output
             r = select(fd + 1, &fds, NULL, NULL, &tv);
 
             if (-1 == r)
@@ -696,14 +724,15 @@ static void mainloop(void)
 	if(rsys<0)
 	{
 		//printf("Errors in shell execution\n");
+
 		perror("video conversion shell");
 		exit(1);
 	}
 	else if (rsys == 0)
 	{
 		//printf("shell is not available \n");
-		perror("shell not available");
-		exit(1);
+        printf("Success in creation of video \n");
+		
 	}
 	else if (rsys == 127)
 	{
@@ -713,7 +742,9 @@ static void mainloop(void)
 	}
 	else
 	{
-		printf("Success in creation of video \n");
+        perror("shell not available");
+        exit(1);
+		
 	}
 }
 
