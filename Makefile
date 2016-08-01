@@ -25,6 +25,7 @@ clean:
 	-rm -f *.ppm
 	-rm -f *.log
 	-rm -f *.mp4
+	-rm -f *.jpg
 
 distclean:
 	-rm -f *.o *.d
