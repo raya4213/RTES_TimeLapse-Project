@@ -17,7 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-
 #include <getopt.h>             /* getopt_long() */
 
 #include <fcntl.h>              /* low-level i/o */
@@ -28,6 +27,12 @@
 #include <sys/time.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h> 
 
 #include <linux/videodev2.h>
 #include <sys/utsname.h>
@@ -40,6 +45,8 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+
+ //#include "clientSender.hpp"
 
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
@@ -89,7 +96,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 50;
+static int              frame_count = 10;
 
 static void errno_exit(const char *s)
 {
@@ -133,12 +140,92 @@ time_t convertEpoch()
 
 }
 
+void error(const char *msg)
+{
+    perror(msg);
+    exit(0);
+}
+
+int clientSender()
+{
+    int sockfd, portno, n;
+    struct sockaddr_in serv_addr;
+    struct hostent *server;
+
+
+    portno = 50000;
+    //portno = atoi(argv[2]);
+    //printf("%d\n", portno);
+    //portno = 10000;    
+    /*sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) 
+        error("ERROR opening socket");
+    server = gethostbyname("localhost");
+    if (server == NULL) {
+        fprintf(stderr,"ERROR, no such host\n");
+        exit(0);
+    }
+    bzero((char *) &serv_addr, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    bcopy((char *)server->h_addr, 
+         (char *)&serv_addr.sin_addr.s_addr,
+         server->h_length);
+    serv_addr.sin_port = htons(portno);*/
 
 
 
+    //namedWindow( "Client", CV_WINDOW_AUTOSIZE );// Create a window for display.
+    
+    Mat image;
+    int tag = 3;
+    char jpg_dumpname[]="laps00000000.jpg";
+    while(tag<=frame_count)
+    {
+        sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sockfd < 0) 
+            error("ERROR opening socket");
+        server = gethostbyname("localhost");
+        if (server == NULL) {
+            fprintf(stderr,"ERROR, no such host\n");
+            exit(0);
+        }
+        bzero((char *) &serv_addr, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        bcopy((char *)server->h_addr, 
+             (char *)&serv_addr.sin_addr.s_addr,
+             server->h_length);
+        serv_addr.sin_port = htons(portno);
+        //printf("start\n");
+        if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+        {
+            //printf("rey mama\n");
+            error("ERROR connecting");
+        }
+        snprintf(&jpg_dumpname[4], 9, "%08d", tag);
+        strncat(&jpg_dumpname[12], ".jpg", 5);
+        tag++;
+        //printf("%d\n", tag);
+        image = imread(jpg_dumpname, CV_LOAD_IMAGE_COLOR);
+        if(! image.data )                              // Check for invalid input
+        {
+            cout <<  "Could not open or find the image" << std::endl ;
+            return -1;
+        }
+        
+        //imshow( "Client", image ); 
+        
+        image = (image.reshape(0,1)); // to make it continuous
+        int  imgSize = image.total()*image.elemSize();
+        n = send(sockfd, image.data, imgSize, 0);
+        if (n < 0) 
+             error("ERROR writing to socket");
+        close(sockfd);
+        //sockfd = -1;
+        //printf("end\n");
+    }
 
-
-
+    return 0;
+}
 
 
 
@@ -155,7 +242,7 @@ int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
 
 
 
-
+int checkFrameCount = 0;
 
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *timestamp)
 {
@@ -232,8 +319,15 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 
     //printf("wrote %d bytes\n", total);
     close(dumpfd);
-    
+    checkFrameCount++;
+    printf(" checkFrameCount%d\n", checkFrameCount);
     convertPpmToJpeg(ppm_dumpname,jpg_dumpname);
+    if (checkFrameCount == frame_count)
+    {
+        printf("Entering client Sender loop\n");
+        clientSender();
+    }
+
     
 }
 
@@ -718,7 +812,7 @@ static void mainloop(void)
 	{
 		//printf("shell is not available \n");
 		perror("shell not available");
-		exit(1);
+		//exit(1);
 	}
 	else if (rsys == 127)
 	{
