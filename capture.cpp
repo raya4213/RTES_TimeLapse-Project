@@ -548,21 +548,6 @@ static int read_frame(void)
             printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
             
            
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             //extra addition
             /*
             cvmat = cvMat(VRES, HRES, CV_8UC3, buffers[0].start);
