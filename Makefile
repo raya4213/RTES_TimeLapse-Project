@@ -22,9 +22,10 @@ all:	capture
 clean:
 	-rm -f *.o *.d
 	-rm -f capture
-	-rm -f *.ppm
+	-rm -f lap*.ppm
+	-rm -f lap*.jpg
 	-rm -f *.log
-	-rm -f *.mp4
+	-rm -f tim*.mp4
 
 distclean:
 	-rm -f *.o *.d
