@@ -16,7 +16,7 @@ else
   fps="$1" # use the fps passed from C code 
 fi
 
-echo "value of fps" $fps >> LOG_FILE
+echo "value of fps" $fps >> $LOG_FILE
 #use ffmpeg to convert to video 
 ffmpeg -r $fps -pattern_type glob -i '*.ppm' -c:v libx264 $VIDEO_FILE
 

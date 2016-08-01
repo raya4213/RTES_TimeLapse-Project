@@ -115,6 +115,33 @@ static int xioctl(int fh, int request, void *arg)
 }
 
 
+long getEpochTimeShift(){
+        struct timeval epochtime;
+        struct timespec  vsTime;
+
+        gettimeofday(&epochtime, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &vsTime);
+
+        long uptime_ms = vsTime.tv_sec* 1000 + (long)  round( vsTime.tv_nsec/ 1000000.0);
+        long epoch_ms =  epochtime.tv_sec * 1000  + (long) round( epochtime.tv_usec/1000.0);
+        return epoch_ms - uptime_ms;
+    }
+
+time_t convertEpoch()
+{
+
+
+}
+
+
+
+
+
+
+
+
+
+
 int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
 {
     //printf("%s\n", ppm_dumpname);
@@ -487,23 +514,54 @@ static int read_frame(void)
             assert(buf.index < n_buffers);
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             //printf("index value %d\n",buf.index );	
             // to process 
             process_image(buffers[buf.index].start, buf.bytesused);
+
+             //without epoch set 
+            printf("\n image captured(before correction) at %ld s, %ld ms\n",buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000);
+
+
+            //with epoch changes 
+           long toEpochOffset_ms ;
+           toEpochOffset_ms = getEpochTimeShift();
+
+
+            //////////////////////
+            //...somewhere in your capture loop: 
+
+            //  struct v4l2_buffer buf;
+
+            //make the v4l call to  xioctl(fd, VIDIOC_DQBUF, &buf)
+
+            //then: 
+            long temp_ms ;
+            temp_ms = 1000 * buf.timestamp.tv_sec + (long) round(  buf.timestamp.tv_usec / 1000.0);
+            long epochTimeStamp_ms ;
+            epochTimeStamp_ms= temp_ms + toEpochOffset_ms ;
+
+            printf( "\nFrame time epoch: %ld ms\n",epochTimeStamp_ms);
+            
+            struct timeval tv;
+
+            gettimeofday(&tv, 0);
+            printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
+            
+           
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
             //extra addition
             /*
