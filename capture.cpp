@@ -46,8 +46,23 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
- //#include "clientSender.hpp"
+ #include <semaphore.h>
+ #include <pthread.h>
 
+#define NUM_THREADS 2
+/*POSIX*/ 
+pthread_t threads[NUM_THREADS];
+pthread_attr_t rt_sched_attr[NUM_THREADS];
+int rt_max_prio, rt_min_prio;
+struct sched_param rt_param[NUM_THREADS];
+struct sched_param nrt_param;
+
+#define startService       0
+#define serviceCompression 1
+#define serviceSocketSend  2
+
+sem_t sendSocket;
+sem_t compression;
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define COLOR_CONVERT
@@ -96,8 +111,9 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
+//<<<<<<< HEAD
 static int              frame_count = 10;
-
+//int                     abortTest = 1;
 static void errno_exit(const char *s)
 {
         fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
@@ -134,9 +150,61 @@ long getEpochTimeShift(){
         return epoch_ms - uptime_ms;
     }
 
-time_t convertEpoch()
-{
 
+
+tm * timeofFrameCpature( v4l2_buffer buf)
+{
+    //capturing the time of at which frame is DQ
+            //without epoch set 
+            printf("\n image captured(before correction) at %ld s, %ld ms\n",buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000);
+
+
+            //with epoch changes 
+           time_t toEpochOffset_ms ;
+           toEpochOffset_ms = getEpochTimeShift();
+
+
+            time_t time_s;
+            long int temp_ms ;
+            long int epochTimeStamp_ms;
+            long int temp_s;
+            long int epochTimeStamp_s;
+
+
+            time(&time_s);
+            temp_ms = 1000 * buf.timestamp.tv_sec + (long int) round(  buf.timestamp.tv_usec / 1000.0);            
+            epochTimeStamp_ms= temp_ms + toEpochOffset_ms ;
+
+            temp_s = buf.timestamp.tv_sec + (long int) (round(  buf.timestamp.tv_usec / 1000.0)/1000.0);            
+            epochTimeStamp_s= temp_s + (long int )(round(toEpochOffset_ms/1000)) ;
+
+            
+            printf( "\nFrame time epoch: %ld s\n",epochTimeStamp_s);
+            printf( "\nFrame time epoch: %ld ms\n",epochTimeStamp_ms);
+            printf( "\nTime in linux : %ld s\n",time_s);
+            
+            
+            //struct timeval tv;
+            //gettimeofday(&tv, 0);
+            //printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
+            
+            struct tm * timeinfo;
+            char timebuffer[50];
+
+
+
+            timeinfo = localtime(&time_s);            
+            //In format HH:MM PM
+            strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
+            printf("System Time  %s\n",timebuffer );
+            //time(&rawtime);
+            timeinfo = localtime(&epochTimeStamp_s);            
+            //In format HH:MM PM
+            strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
+            printf("Frame Buffer capture time %s\n",timebuffer );
+            
+            
+            return timeinfo ;
 
 }
 
@@ -145,91 +213,86 @@ void error(const char *msg)
     perror(msg);
     exit(0);
 }
+int tagFrmdump = 0;
 
-int clientSender()
+
+void *clientSender(void *input)
 {
-    int sockfd, portno, n;
-    struct sockaddr_in serv_addr;
-    struct hostent *server;
-
-
-    portno = 50000;
-    //portno = atoi(argv[2]);
-    //printf("%d\n", portno);
-    //portno = 10000;    
-    /*sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) 
-        error("ERROR opening socket");
-    server = gethostbyname("localhost");
-    if (server == NULL) {
-        fprintf(stderr,"ERROR, no such host\n");
-        exit(0);
-    }
-    bzero((char *) &serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, 
-         (char *)&serv_addr.sin_addr.s_addr,
-         server->h_length);
-    serv_addr.sin_port = htons(portno);*/
-
-
-
-    //namedWindow( "Client", CV_WINDOW_AUTOSIZE );// Create a window for display.
-    
-    Mat image;
-    int tag = 3;
-    char jpg_dumpname[]="laps00000000.jpg";
-    while(tag<=frame_count)
+    static int abortTestSocketSend = 1; 
+    while(1)
     {
-        sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd < 0) 
-            error("ERROR opening socket");
-        server = gethostbyname("localhost");
-        if (server == NULL) {
-            fprintf(stderr,"ERROR, no such host\n");
-            exit(0);
-        }
-        bzero((char *) &serv_addr, sizeof(serv_addr));
-        serv_addr.sin_family = AF_INET;
-        bcopy((char *)server->h_addr, 
-             (char *)&serv_addr.sin_addr.s_addr,
-             server->h_length);
-        serv_addr.sin_port = htons(portno);
-        //printf("start\n");
-        if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+        abortTestSocketSend++;
+        printf("%d abortTestSocketSend %d frame_count\n",abortTestSocketSend, frame_count );
+        if (abortTestSocketSend == frame_count)
         {
-            //printf("rey mama\n");
-            error("ERROR connecting");
+            printf("breaking loop\n");
+            break;
         }
-        snprintf(&jpg_dumpname[4], 9, "%08d", tag);
-        strncat(&jpg_dumpname[12], ".jpg", 5);
-        tag++;
-        //printf("%d\n", tag);
-        image = imread(jpg_dumpname, CV_LOAD_IMAGE_COLOR);
-        if(! image.data )                              // Check for invalid input
-        {
-            cout <<  "Could not open or find the image" << std::endl ;
-            return -1;
-        }
+        //printf("%s\n", );
+        printf("Entering clientSender\n");
+        sem_wait(&sendSocket);
+        printf(" mama tag raa %d    \n", tagFrmdump);
+        int sockfd, portno, n;
+        struct sockaddr_in serv_addr;
+        struct hostent *server;
+        portno = 50000;
         
-        //imshow( "Client", image ); 
-        
-        image = (image.reshape(0,1)); // to make it continuous
-        int  imgSize = image.total()*image.elemSize();
-        n = send(sockfd, image.data, imgSize, 0);
-        if (n < 0) 
-             error("ERROR writing to socket");
-        close(sockfd);
-        //sockfd = -1;
-        //printf("end\n");
+        Mat image;
+        //int tag = 3;
+        char jpg_dumpname[]="laps00000000.jpg";
+        //while(tag<=frame_count)
+        //{
+            sockfd = socket(AF_INET, SOCK_STREAM, 0);
+            if (sockfd < 0) 
+                error("ERROR opening socket");
+            server = gethostbyname("localhost");
+            if (server == NULL) {
+                fprintf(stderr,"ERROR, no such host\n");
+                exit(0);
+            }
+            bzero((char *) &serv_addr, sizeof(serv_addr));
+            serv_addr.sin_family = AF_INET;
+            bcopy((char *)server->h_addr, 
+                 (char *)&serv_addr.sin_addr.s_addr,
+                 server->h_length);
+            serv_addr.sin_port = htons(portno);
+            //printf("start\n");
+            if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+            {
+                //printf("rey mama\n");
+                error("ERROR connecting");
+            }
+            snprintf(&jpg_dumpname[4], 9, "%08d", tagFrmdump);
+            strncat(&jpg_dumpname[12], ".jpg", 5);
+            //tag++;
+            //printf("%d\n", tag);
+            image = imread(jpg_dumpname, CV_LOAD_IMAGE_COLOR);
+            if(! image.data )                              // Check for invalid input
+            {
+                cout <<  "Could not open or find the image" << std::endl ;
+                //return -1;
+            }
+            
+            //imshow( "Client", image ); 
+            
+            image = (image.reshape(0,1)); // to make it continuous
+            int  imgSize = image.total()*image.elemSize();
+            n = send(sockfd, image.data, imgSize, 0);
+            if (n < 0) 
+                 error("ERROR writing to socket");
+            close(sockfd);
+            //sockfd = -1;
+            //printf("end\n");
+        //}
     }
 
-    return 0;
+    printf("Exiting sendSocket \n");
+
 }
 
 
 
-int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
+/*int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
 {
     //printf("%s\n", ppm_dumpname);
     //printf("%s\n", jpg_dumpname);
@@ -238,28 +301,55 @@ int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
     imwrite( jpg_dumpname, imagePpm);
 
     return 0;
-}
+}*/
 
+void *convertPpmToJpeg(void * input)
+{
+    char jpg_dumpname[]="laps00000000.jpg";
+    char ppm_dumpname[]="laps00000000.jpg";
+    static int abortTestJpeg = 1;
+    while(1)
+    {
+        abortTestJpeg++;
+        if (abortTestJpeg == frame_count)
+            break;
+        printf("abortTestJpeg %d\n", abortTestJpeg);
+        printf("Entering compression\n");
+        sem_wait(&compression);
+        Mat imagePpm;
+        snprintf(&ppm_dumpname[4], 9, "%08d", tagFrmdump);
+        strncat(&ppm_dumpname[12], ".ppm", 5);
+        snprintf(&jpg_dumpname[4], 9, "%08d", tagFrmdump);
+        strncat(&jpg_dumpname[12], ".jpg", 5);
+        imagePpm = imread(ppm_dumpname,1);
+        imwrite( jpg_dumpname, imagePpm);
+        sem_post(&sendSocket); // starting send of data
+    }
+
+}
 
 
 int checkFrameCount = 0;
 
-static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *timestamp)
+static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *timestamp,v4l2_buffer buf)
 {
     int written, i, total, dumpfd;
     char ppm_dumpname[]="laps00000000.ppm";
     char jpg_dumpname[]="laps00000000.jpg";
-    char ppm_user_name[100];
+    char ppm_user_name[98];
     char ppm_header[]="#Frame00000 HH:MM:SS PM";
     char ppm_resolution[16]="\n"HRES_STR" "VRES_STR"";
 
+
+    tagFrmdump = tag; // Take care of this
     //Appending time to each frame 
     time_t rawtime;
     struct tm * timeinfo;
     char timebuffer[50];
     time(&rawtime);
-    timeinfo = localtime ( &rawtime );
+    //timeinfo = localtime ( &rawtime );
     
+    timeinfo = timeofFrameCpature(buf);
     //In format HH:MM PM
     strftime(timebuffer,50,"%I:%M:%S %p", timeinfo);
 
@@ -320,15 +410,24 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     //printf("wrote %d bytes\n", total);
     close(dumpfd);
     checkFrameCount++;
-    printf(" checkFrameCount%d\n", checkFrameCount);
-    convertPpmToJpeg(ppm_dumpname,jpg_dumpname);
-    if (checkFrameCount == frame_count)
+
+    //convertPpmToJpeg(ppm_dumpname,jpg_dumpname);
+   
+    //clientSender(tag);
+   /* if (checkFrameCount == frame_count)
     {
         printf("Entering client Sender loop\n");
         clientSender();
-    }
-
-    
+    }*/
+    if(tag>2)
+    {
+        //clock_gettime(CLOCK_REALTIME, &start_time);
+        //clientSender(tag);
+        //clock_gettime(CLOCK_REALTIME, &stop_time);
+        //printf("Time elapsed in transfer of files for %d image is %ld sec %ld nsec\n", frame_count, (stop_time.tv_sec)-(start_time.tv_sec), ((stop_time.tv_nsec)-(start_time.tv_nsec)));
+        printf("Entering for loop\n");
+        sem_post(&compression);
+    }    
 }
 
 
@@ -460,11 +559,10 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 }
 
 
-
 unsigned int framecnt=0;
 unsigned char bigbuffer[(1280*960)];
 
-static void process_image(const void *p, int size)
+static void process_image(const void *p, int size,v4l2_buffer buf)
 
 {
     int i, newi, newsize=0;
@@ -505,7 +603,7 @@ static void process_image(const void *p, int size)
             yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi+3], &bigbuffer[newi+4], &bigbuffer[newi+5]);
         }
 
-        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time,buf);
 #else
         printf("Dump YUYV converted to YY size %d\n", size);
        
@@ -527,7 +625,7 @@ static void process_image(const void *p, int size)
     else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
     {
         printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
+        dump_ppm(p, size, framecnt, &frame_time,buf);
     }
     else
     {
@@ -546,10 +644,6 @@ static int read_frame(void)
 {
     struct v4l2_buffer buf;
     unsigned int i;
-    
-	
-
-
 
     switch (io)
     {
@@ -573,7 +667,7 @@ static int read_frame(void)
                 }
             }
 
-            process_image(buffers[0].start, buffers[0].length);
+            process_image(buffers[0].start, buffers[0].length,buf);
             break;
 
         case IO_METHOD_MMAP:
@@ -581,7 +675,9 @@ static int read_frame(void)
 
             buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             buf.memory = V4L2_MEMORY_MMAP;
-            buf.flags = V4L2_BUF_FLAG_TIMECODE;
+            //buf.flags = V4L2_BUF_FLAG_TIMECODE;
+            buf.flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+            //buf.flags = V4L2_BUF_FLAG_TSTAMP_SRC_EOF;
             //Applications call the VIDIOC_QBUF ioctl to enqueue an empty (capturing) or filled (output) buffer in the driver's incoming queue
             //DQUEUE the buffer and capture which is furthre processed 
 
@@ -607,69 +703,12 @@ static int read_frame(void)
 
             assert(buf.index < n_buffers);
 
-
-            //printf("index value %d\n",buf.index );	
-            // to process 
-            process_image(buffers[buf.index].start, buf.bytesused);
-
-             //without epoch set 
-            printf("\n image captured(before correction) at %ld s, %ld ms\n",buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000);
-
-
-            //with epoch changes 
-           long toEpochOffset_ms ;
-           toEpochOffset_ms = getEpochTimeShift();
-
-
-            //////////////////////
-            //...somewhere in your capture loop: 
-
-            //  struct v4l2_buffer buf;
-
-            //make the v4l call to  xioctl(fd, VIDIOC_DQBUF, &buf)
-
-            //then: 
-            long temp_ms ;
-            temp_ms = 1000 * buf.timestamp.tv_sec + (long) round(  buf.timestamp.tv_usec / 1000.0);
-            long epochTimeStamp_ms ;
-            epochTimeStamp_ms= temp_ms + toEpochOffset_ms ;
-
-            printf( "\nFrame time epoch: %ld ms\n",epochTimeStamp_ms);
             
-            struct timeval tv;
+            process_image(buffers[buf.index].start, buf.bytesused,buf);
 
-            gettimeofday(&tv, 0);
-            printf("current time %ld sec, %ld msec\n", tv.tv_sec, tv.tv_usec/1000);
+
             
-           
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            //extra addition
-            /*
-            cvmat = cvMat(VRES, HRES, CV_8UC3, buffers[0].start);
-            printf("Here0 \n");
-            img = cvDecodeImage(&cvmat, 1);
-			cvShowImage("image", img);
-			printf("Here1 \n");
-			//cvWaitKey(0);
-			printf("Here2 \n");
-    		cvSaveImage("image2.ppm", img, 0);
-    		printf("Here3 \n");
-			//
-            */
+             
             if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
                     errno_exit("VIDIOC_QBUF");
             break;
@@ -704,7 +743,7 @@ static int read_frame(void)
 
             assert(i < n_buffers);
 
-            process_image((void *)buf.m.userptr, buf.bytesused);
+            process_image((void *)buf.m.userptr, buf.bytesused,buf);
 
             if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
                     errno_exit("VIDIOC_QBUF");
@@ -724,7 +763,7 @@ static void mainloop(void)
     struct timespec time_error;
     time_error.tv_sec=0;
     time_error.tv_nsec=0;
-    int fps=20; //choose the fps for video conversion using ffmpeg
+    int fps=30; //choose the fps for video conversion using ffmpeg
 
 
     struct timespec frame_time;
@@ -752,6 +791,8 @@ static void mainloop(void)
             tv.tv_sec = 2;
             tv.tv_usec = 0;
 
+            //https://linuxtv.org/downloads/v4l-dvb-apis/func-select.html
+            //suspend execution until the driver has captured data or is ready to accept data for output
             r = select(fd + 1, &fds, NULL, NULL, &tv);
 
             if (-1 == r)
@@ -801,29 +842,37 @@ static void mainloop(void)
     //strncat(command,string(fps));
     //rsys =system(command);
     rsys =system("sh image2Video.sh 30");
-	
-	if(rsys<0)
-	{
-		//printf("Errors in shell execution\n");
-		perror("video conversion shell");
-		exit(1);
-	}
-	else if (rsys == 0)
-	{
-		//printf("shell is not available \n");
-		perror("shell not available");
-		//exit(1);
-	}
-	else if (rsys == 127)
-	{
-		
-		perror("child process issue");
-		exit(1);
-	}
-	else
-	{
-		printf("Success in creation of video \n");
-	}
+    
+    if(rsys<0)
+    {
+        //printf("Errors in shell execution\n");
+
+        perror("video conversion shell");
+        exit(1);
+    }
+    else if (rsys == 0)
+    {
+        //printf("shell is not available \n");
+//<<<<<<< HEAD
+        perror("shell not available");
+        //exit(1);
+//=======
+        printf("Success in creation of video \n");
+        
+//>>>>>>> cb922a117f7647c7580c916343ff7d02d197d5bc
+    }
+    else if (rsys == 127)
+    {
+        
+        perror("child process issue");
+        exit(1);
+    }
+    else
+    {
+        perror("shell not available");
+        exit(1);
+        
+    }
 }
 
 static void stop_capturing(void)
@@ -858,8 +907,8 @@ static void start_capturing(void)
                 break;
 
         case IO_METHOD_MMAP:
-        		//creating multiple buffers
-        		//Queuing the frames from stream into buffer 
+                //creating multiple buffers
+                //Queuing the frames from stream into buffer 
                 for (i = 0; i < n_buffers; ++i) 
                 {
                         printf("allocated buffer %d\n", i);
@@ -1276,6 +1325,96 @@ long_options[] = {
         { 0, 0, 0, 0 }
 };
 
+void *Sequencer(void *input)
+{
+    printf("Entering Sequencer\n");
+   sem_init(&sendSocket,0,0);
+   sem_init(&compression,0,0);
+
+  // Creating threads 
+
+   int rc;
+   //printf("Starting Sequencer\n");
+   //sem_init(&semF10,0,1);
+   //sem_init(&semF20,0,1);
+   
+   // Creating attributes for Service fib10
+   pthread_attr_init(&rt_sched_attr[serviceCompression]);
+   pthread_attr_setinheritsched(&rt_sched_attr[serviceCompression], PTHREAD_EXPLICIT_SCHED);
+   pthread_attr_setschedpolicy(&rt_sched_attr[serviceCompression], SCHED_FIFO);
+    
+   // Creating attributes for Service fib20
+   pthread_attr_init(&rt_sched_attr[serviceSocketSend]);
+   pthread_attr_setinheritsched(&rt_sched_attr[serviceSocketSend], PTHREAD_EXPLICIT_SCHED);
+   pthread_attr_setschedpolicy(&rt_sched_attr[serviceSocketSend], SCHED_FIFO);
+   
+   rt_max_prio = sched_get_priority_max(SCHED_FIFO);
+   rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+   
+   printf("min prio = %d, max prio = %d\n", rt_min_prio, rt_max_prio);
+   
+   // Setting priority for Service fib10
+   rt_param[serviceCompression].sched_priority = rt_max_prio - 10;
+   pthread_attr_setschedparam(&rt_sched_attr[serviceCompression], &rt_param[serviceCompression]);
+
+   printf("Creating thread serviceCompression %d\n", serviceCompression);
+   rc = pthread_create(&threads[serviceCompression], &rt_sched_attr[serviceCompression], convertPpmToJpeg, (void *)serviceCompression);
+   
+   if (rc)
+   {
+       printf("ERROR; pthread_create for serviceCompression rc is %d\n", rc);
+       perror(NULL);
+       exit(-1);
+   }
+   
+   // Setting priority for Service fib20
+   rt_param[serviceSocketSend].sched_priority = rt_max_prio - 20;
+   pthread_attr_setschedparam(&rt_sched_attr[serviceSocketSend], &rt_param[serviceSocketSend]);
+
+   printf("Creating thread serviceSocketSend %d\n", serviceSocketSend);
+   rc = pthread_create(&threads[serviceSocketSend], &rt_sched_attr[serviceSocketSend], clientSender, (void *)serviceSocketSend);
+
+
+   if (rc)
+   {
+       printf("ERROR; pthread_create for serviceF20 rc is %d\n", rc);
+       perror(NULL);
+       exit(-1);
+   }
+
+
+    open_device();
+    printf("hello mama\n");
+    init_device();
+    start_capturing();
+    mainloop();
+    stop_capturing();
+    uninit_device();
+    close_device();
+    fprintf(stderr, "\n");
+
+    printf("mama ekkadiki ostunna\n");
+    //abortTest = 0;
+    //printf("abortTest %d\n", abortTest);
+
+        if(pthread_join(threads[serviceSocketSend ], NULL) == 0)
+        printf("serviceSocketSend done\n");
+    else
+        perror("serviceSocketSend");
+    if(pthread_join(threads[serviceCompression ], NULL) == 0)
+        printf("serviceCompression done\n");
+    else
+        perror("serviceCompression");
+
+
+
+
+    printf("mama ekkadiki ostunna\n");
+    //abortTest = 0;
+    printf("serviceSocketSend Completed\n");
+    printf("serviceCompression Completed\n");
+}
+
 int main(int argc, char **argv)
 {
     if(argc > 1)
@@ -1340,21 +1479,37 @@ int main(int argc, char **argv)
         }
     }
 
-  /*
-  time_t rawtime;
-  struct tm * timeinfo;
 
-  time ( &rawtime );
-  timeinfo = localtime ( &rawtime );
-  printf ( "Current local time and date: %s", asctime (timeinfo) );
-  */
-    open_device();
-    init_device();
-    start_capturing();
-    mainloop();
-    stop_capturing();
-    uninit_device();
-    close_device();
-    fprintf(stderr, "\n");
-    return 0;
+    int rc;
+   
+   // Creating attributes for Service startService
+   pthread_attr_init(&rt_sched_attr[startService]);
+   pthread_attr_setinheritsched(&rt_sched_attr[startService], PTHREAD_EXPLICIT_SCHED);
+   pthread_attr_setschedpolicy(&rt_sched_attr[startService], SCHED_FIFO);
+   
+   rt_max_prio = sched_get_priority_max(SCHED_FIFO);
+   rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+   
+   printf("min prio = %d, max prio = %d\n", rt_min_prio, rt_max_prio);
+   
+   //Setting priority for Service startService
+   rt_param[startService].sched_priority = rt_max_prio;
+   pthread_attr_setschedparam(&rt_sched_attr[startService], &rt_param[startService]);
+
+   printf("Creating thread %d\n", startService);
+   rc = pthread_create(&threads[startService], &rt_sched_attr[startService], Sequencer, (void *)startService);
+   
+   if (rc)
+   {
+       printf("ERROR; pthread_create for startService rc is %d\n", rc);
+       perror(NULL);
+       exit(-1);
+   }
+   if(pthread_join(threads[startService], NULL) == 0)
+    printf("startService done\n");
+   else
+        perror("startService");
+
+    printf("Sequencer Completed\n");
+
 }

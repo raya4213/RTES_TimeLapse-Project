@@ -10,7 +10,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 
-#include "clientSender.hpp"
+//#include "clientSender.hpp"
 using namespace cv;
 using namespace std;
 
