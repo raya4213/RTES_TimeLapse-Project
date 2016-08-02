@@ -41,6 +41,16 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+//for cvErode
+#include <opencv2/photo/photo.hpp>
+
+//#include "cv.h"
+//#include <highgui.h>
+//#include <ctype.h>
+
+
+
+
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define COLOR_CONVERT
@@ -49,6 +59,8 @@
 #define HRES_STR "640"
 #define VRES_STR "480"
 
+//To run system at higher rate 
+#define highRate
 
 using namespace cv;
 using namespace std;
@@ -89,7 +101,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 100;
+static int              frame_count = 200;
 
 static void errno_exit(const char *s)
 {
@@ -186,8 +198,86 @@ tm * timeofFrameCpature( v4l2_buffer buf)
 }
 
 
+/***************************************************************************************************
+//Basic reference - http://theembeddedsystems.blogspot.com/2011/05/background-subtraction-using-opencv.html#!/tcmbck
+//upgraded from old format and added integrated multiple changes according to algorithm 
+
+***************************************************************************************************/
+Mat image,frameTime1,frameTime2,frameForeground,img1,img2;
+int BckGnd(Mat imageIn)
+{
+    Mat frame;
+    int erosion_elem = 0;
+    int erosion_size = 2;
+    int dilation_elem = 0;
+    int dilation_size = 2;
+    int dilation_type;
+    static int countabs =0;   
+    
+    if (imageIn.empty()) 
+    {
+        printf("No Frame\n");
+        return -1;
+    }
+
+    imageIn.copyTo(frame);
+
+    if (frame.empty()) 
+    {
+        printf("No Frame\n");
+        return -1;
+    }
+
+    if( dilation_elem == 0 ){ dilation_type = MORPH_RECT; }
+    else if( dilation_elem == 1 ){ dilation_type = MORPH_CROSS; }
+    else if( dilation_elem == 2) { dilation_type = MORPH_ELLIPSE; }
+
+    Mat element = getStructuringElement( dilation_type,Size( 2*dilation_size + 1, 2*dilation_size+1 ),Point( dilation_size, dilation_size ) );
+
+    
+    frame.copyTo(image);
+
+    if (image.empty()) 
+    {
+        printf("no image\n");
+        return -1;
+    }
+
+    cvtColor(image,img1,CV_BGR2GRAY);
+    img1.copyTo(frameTime1);//frame in grayscale
 
 
+    if (frameTime1.empty()) 
+    {
+        printf("No Frame Time 1\n");
+        return -1;
+    }
+
+    if (countabs++ >2)
+    {
+
+        absdiff(frameTime1,frameTime2,frameForeground);
+        imwrite("frameTime1.png",frameTime1);
+        imwrite("frameTime2.png",frameTime2);
+        threshold(frameForeground,frameForeground,10,255,CV_THRESH_BINARY);
+        erode(frameForeground,frameForeground,element);
+
+        dilate(frameForeground,frameForeground,element);
+        imwrite("dilate.png",frameForeground);
+        dilate(frameForeground,frameForeground,element);    
+        erode(frameForeground,frameForeground,element);
+        imwrite("erode.png",frameForeground);
+    }   
+
+    //copy previous frame  to current
+    frameTime1.copyTo(frameTime2);
+    //store this 
+    imwrite("image.png",image);
+    imwrite("frameForeground.png",frameForeground);
+
+
+    return 0;
+}
 
 
 
@@ -196,11 +286,28 @@ tm * timeofFrameCpature( v4l2_buffer buf)
 
 int convertPpmToJpeg(char *ppm_dumpname, char *jpg_dumpname)
 {
-    //printf("%s\n", ppm_dumpname);
-    //printf("%s\n", jpg_dumpname);
+
     Mat imagePpm;
+    int retBck=0;
+    static int count =0;
+
+
     imagePpm = imread(ppm_dumpname,1);
-    imwrite( jpg_dumpname, imagePpm);
+    //changes 
+    if (imagePpm.empty())
+    {
+        printf("empty ppm\n");
+    }
+    if(count++>2)
+    {
+        retBck=BckGnd(imagePpm);
+        //printf("count value %d\n",count );
+    }
+    //printf("value return for BckGnd %d\n",retBck);
+    //end changes     
+    //just for analysis
+    //imwrite( jpg_dumpname, imagePpm);
+    //
 
     return 0;
 }
@@ -217,6 +324,8 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     char ppm_user_name[98];
     char ppm_header[]="#Frame00000 HH:MM:SS PM";
     char ppm_resolution[16]="\n"HRES_STR" "VRES_STR"";
+    int logfd;
+    char logs[]="logger.txt";
 
     //Appending time to each frame 
     time_t rawtime;
@@ -241,6 +350,7 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 
     //open the file 
     dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);  
+    logfd = open(logs, O_WRONLY | O_NONBLOCK|O_APPEND|O_CREAT, 00666);  
     
     //uname -a o/p embedded to header 
     //debug print 
@@ -271,7 +381,12 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     strncat(ppm_header,timebuffer,sizeof(timebuffer));
 
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
+    //debugging
+    written=write(logfd, ppm_header, sizeof(ppm_header));
+    written=write(logfd, "\n", sizeof("\n"));
 
+    //if ()
+    //
     strncat(ppm_resolution,"\n255\n",sizeof("\n255\n"));    
     written=write(dumpfd,ppm_resolution,sizeof(ppm_resolution));
 
@@ -285,6 +400,7 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 
     //printf("wrote %d bytes\n", total);
     close(dumpfd);
+    close(logfd);
     
     convertPpmToJpeg(ppm_dumpname,jpg_dumpname);
     
@@ -464,7 +580,7 @@ static void process_image(const void *p, int size,v4l2_buffer buf)
     else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
     {
 
-#if defined(COLOR_CONVERT)
+    #if defined(COLOR_CONVERT)
         //printf("Dump YUYV converted to RGB size %d\n", size);
        
         // Pixels are YU and YV alternating, so YUYV which is 4 bytes
@@ -478,7 +594,7 @@ static void process_image(const void *p, int size,v4l2_buffer buf)
         }
 
         dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time,buf);
-#else
+    #else
         printf("Dump YUYV converted to YY size %d\n", size);
        
         // Pixels are YU and YV alternating, so YUYV which is 4 bytes
@@ -492,7 +608,7 @@ static void process_image(const void *p, int size,v4l2_buffer buf)
         }
 
         dump_pgm(bigbuffer, (size/2), framecnt, &frame_time);
-#endif
+    #endif
 
     }
 
@@ -518,11 +634,6 @@ static int read_frame(void)
 {
     struct v4l2_buffer buf;
     unsigned int i;
-    
-	
-
-
-
     switch (io)
     {
 
@@ -642,7 +753,7 @@ static void mainloop(void)
     time_error.tv_sec=0;
     time_error.tv_nsec=0;
     int fps=30; //choose the fps for video conversion using ffmpeg
-
+    Mat high_rate_frame;
 
     struct timespec frame_time;
     {
@@ -691,18 +802,20 @@ static void mainloop(void)
             if (read_frame())
             {
 
-                int j = nanosleep(&read_delay, &time_error);
+                #ifndef highRate
+                    int j = nanosleep(&read_delay, &time_error);
+                    if( j!= 0)
+                        perror("nanosleep");
+                    else
+                        count--;
+                    break;
+                #else
+                    //cvCapture();
+
+                #endif     
                 clock_gettime(CLOCK_REALTIME, &stop_time);  
                 //printf("%d\n", j);
-                if( j!= 0)
-                    perror("nanosleep");
-                else
-                    //printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-                //display time interval between frames 
-                //printf("frame_rate.tv_sec=%ld, frame_rate.tv_nsec=%ld\n", (stop_time.tv_sec-start_time.tv_sec), (stop_time.tv_nsec - start_time.tv_nsec));
-
-                count--;
-                break;
+                
             }
 
             /* EAGAIN - continue select loop unless count done. */
